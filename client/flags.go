@@ -80,8 +80,8 @@ func PostCommands(cmds ...*cobra.Command) []*cobra.Command {
 			"<host>:<port> to tendermint rpc interface for this chain")
 		c.Flags().Bool(FlagUseLedger, false, "Use a connected Ledger device")
 		c.Flags().Float64(FlagGasAdjustment, DefaultGasAdjustment,
-			"adjustment factor to be multiplied against the estimate returned by the tx" +
-			" simulation; if the gas limit is set manually this flag is ignored ")
+			"adjustment factor to be multiplied against the estimate returned by the tx"+
+				" simulation; if the gas limit is set manually this flag is ignored ")
 		c.Flags().Bool(FlagAsync, false, "broadcast transactions asynchronously")
 		c.Flags().Bool(FlagJson, false, "return output in json format")
 		c.Flags().Bool(FlagPrintResponse, true,
@@ -89,13 +89,13 @@ func PostCommands(cmds ...*cobra.Command) []*cobra.Command {
 		c.Flags().Bool(FlagTrustNode, true,
 			"Trust connected full node (don't verify proofs for responses)")
 		c.Flags().Bool(FlagDryRun, false,
-			"ignore the --gas flag and perform a simulation " +
-			"of a transaction, but don't broadcast it")
+			"ignore the --gas flag and perform a simulation "+
+				"of a transaction, but don't broadcast it")
 		c.Flags().Bool(FlagGenerateOnly, false,
 			"build an unsigned transaction and write it to STDOUT")
 		// --gas can accept integers and "simulate"
 		c.Flags().Var(&GasFlagVar, "gas", fmt.Sprintf(
-			"gas limit to set per-transaction; set to %q to calculate required gas" +
+			"gas limit to set per-transaction; set to %q to calculate required gas"+
 				" automatically (default %d)", GasFlagSimulate, DefaultGasLimit))
 		viper.BindPFlag(FlagTrustNode, c.Flags().Lookup(FlagTrustNode))
 		viper.BindPFlag(FlagUseLedger, c.Flags().Lookup(FlagUseLedger))

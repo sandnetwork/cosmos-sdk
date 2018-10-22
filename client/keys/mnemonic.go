@@ -20,11 +20,11 @@ func mnemonicKeyCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "mnemonic",
 		Short: "Compute the bip39 mnemonic for some input entropy",
-		Long:  "Create a bip39 mnemonic, sometimes called a seed phrase, by reading from the " +
+		Long: "Create a bip39 mnemonic, sometimes called a seed phrase, by reading from the " +
 			"system entropy. To pass your own entropy, use --unsafe-entropy",
-		RunE:  runMnemonicCmd,
+		RunE: runMnemonicCmd,
 	}
-	cmd.Flags().Bool(flagUserEntropy, false, "Prompt the user to supply their " +
+	cmd.Flags().Bool(flagUserEntropy, false, "Prompt the user to supply their "+
 		"own entropy, instead of relying on the system")
 	return cmd
 }
@@ -45,7 +45,7 @@ func runMnemonicCmd(cmd *cobra.Command, args []string) error {
 			return err
 		}
 		if len(inputEntropy) < 43 {
-			return fmt.Errorf("256-bits is 43 characters in Base-64, and 100 in Base-6. " +
+			return fmt.Errorf("256-bits is 43 characters in Base-64, and 100 in Base-6. "+
 				"You entered %v, and probably want more", len(inputEntropy))
 		}
 		conf, err := client.GetConfirmation(

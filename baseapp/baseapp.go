@@ -218,7 +218,7 @@ func (st *state) CacheMultiStore() sdk.CacheMultiStore {
 func (app *BaseApp) setCheckState(header abci.Header) {
 	ms := app.cms.CacheMultiStore()
 	app.checkState = &state{
-		ms:  ms,
+		ms: ms,
 		ctx: sdk.NewContext(ms, header, true, app.Logger).
 			WithMinimumFees(app.minimumFees),
 	}

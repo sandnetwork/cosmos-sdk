@@ -446,8 +446,10 @@ func TestCheckTx(t *testing.T) {
 	// This ensures changes to the kvstore persist across successive CheckTx.
 	counterKey := []byte("counter-key")
 
-	anteOpt := func(bapp *BaseApp) { bapp.SetAnteHandler(
-		anteHandlerTxTest(t, capKey1, counterKey)) }
+	anteOpt := func(bapp *BaseApp) {
+		bapp.SetAnteHandler(
+			anteHandlerTxTest(t, capKey1, counterKey))
+	}
 	routerOpt := func(bapp *BaseApp) {
 		// TODO: can remove this once CheckTx doesnt process msgs.
 		bapp.Router().AddRoute(typeMsgCounter,
@@ -497,8 +499,10 @@ func TestDeliverTx(t *testing.T) {
 
 	// test increments in the handler
 	deliverKey := []byte("deliver-key")
-	routerOpt := func(bapp *BaseApp) { bapp.Router().AddRoute(typeMsgCounter, handlerMsgCounter(t,
-		capKey1, deliverKey)) }
+	routerOpt := func(bapp *BaseApp) {
+		bapp.Router().AddRoute(typeMsgCounter, handlerMsgCounter(t,
+			capKey1, deliverKey))
+	}
 
 	app := setupBaseApp(t, anteOpt, routerOpt)
 
@@ -681,7 +685,9 @@ func TestRunInvalidTransaction(t *testing.T) {
 	}
 	routerOpt := func(bapp *BaseApp) {
 		bapp.Router().AddRoute(typeMsgCounter, func(ctx sdk.Context,
-			msg sdk.Msg) (res sdk.Result) { return })
+			msg sdk.Msg) (res sdk.Result) {
+			return
+		})
 	}
 
 	app := setupBaseApp(t, anteOpt, routerOpt)
