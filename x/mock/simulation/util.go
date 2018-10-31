@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	abci "github.com/tendermint/tendermint/abci/types"
 	"github.com/tendermint/tendermint/crypto/ed25519"
 	"github.com/tendermint/tendermint/crypto/secp256k1"
 
@@ -102,10 +103,13 @@ func addLogMessage(testingmode bool, blockLogBuilders []*strings.Builder, height
 }
 
 // assertAllInvariants asserts a list of provided invariants against application state
-func assertAllInvariants(t *testing.T, app *baseapp.BaseApp, invariants []Invariant, displayLogs func()) {
+func assertAllInvariants(t *testing.T, app *baseapp.BaseApp, header abci.Header,
+	invariants []Invariant, where string, displayLogs func()) {
+
 	for i := 0; i < len(invariants); i++ {
-		err := invariants[i](app)
+		err := invariants[i](app, header)
 		if err != nil {
+			fmt.Printf("Invariants broken after %s\n", where)
 			fmt.Println(err.Error())
 			displayLogs()
 			t.Fatal()
@@ -130,7 +134,7 @@ func logPrinter(testingmode bool, logs []*strings.Builder) func() {
 			for i := 0; i < len(logs); i++ {
 				// We're passed the last created block
 				if logs[i] == nil {
-					numLoggers = i - 1
+					numLoggers = i
 					break
 				}
 			}
@@ -142,7 +146,7 @@ func logPrinter(testingmode bool, logs []*strings.Builder) func() {
 			}
 			for i := 0; i < numLoggers; i++ {
 				if f != nil {
-					_, err := f.WriteString(fmt.Sprintf("Begin block %d\n", i))
+					_, err := f.WriteString(fmt.Sprintf("Begin block %d\n", i+1))
 					if err != nil {
 						panic("Failed to write logs to file")
 					}
@@ -151,7 +155,7 @@ func logPrinter(testingmode bool, logs []*strings.Builder) func() {
 						panic("Failed to write logs to file")
 					}
 				} else {
-					fmt.Printf("Begin block %d\n", i)
+					fmt.Printf("Begin block %d\n", i+1)
 					fmt.Println((*logs[i]).String())
 				}
 			}

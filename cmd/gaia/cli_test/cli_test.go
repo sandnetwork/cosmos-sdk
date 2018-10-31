@@ -285,6 +285,12 @@ func TestGaiaCLICreateValidator(t *testing.T) {
 	validator = executeGetValidator(t, fmt.Sprintf("gaiacli query validator %s --output=json %v", sdk.ValAddress(barAddr), flags))
 	require.Equal(t, "1.0000000000", validator.Tokens.String())
 
+	validatorUbds := executeGetValidatorUnbondingDelegations(t,
+		fmt.Sprintf("gaiacli query unbonding-delegations-from %s --output=json %v",
+			sdk.ValAddress(barAddr), flags))
+	require.Len(t, validatorUbds, 1)
+	require.Equal(t, "1", validatorUbds[0].Balance.Amount.String())
+
 	params := executeGetParams(t, fmt.Sprintf("gaiacli query parameters --output=json %v", flags))
 	require.True(t, defaultParams.Equal(params))
 
@@ -346,6 +352,11 @@ func TestGaiaCLISubmitProposal(t *testing.T) {
 	proposalsQuery, _ = tests.ExecuteT(t, fmt.Sprintf("gaiacli query proposals %v", flags), "")
 	require.Equal(t, "  1 - Test", proposalsQuery)
 
+	deposit := executeGetDeposit(t,
+		fmt.Sprintf("gaiacli query deposit --proposal-id=1 --depositer=%s --output=json %v",
+			fooAddr, flags))
+	require.Equal(t, int64(5), deposit.Amount.AmountOf("steak").Int64())
+
 	depositStr := fmt.Sprintf("gaiacli tx deposit %v", flags)
 	depositStr += fmt.Sprintf(" --from=%s", "foo")
 	depositStr += fmt.Sprintf(" --deposit=%s", "10steak")
@@ -363,6 +374,17 @@ func TestGaiaCLISubmitProposal(t *testing.T) {
 
 	executeWrite(t, depositStr, app.DefaultKeyPass)
 	tests.WaitForNextNBlocksTM(2, port)
+
+	// test query deposit
+	deposits := executeGetDeposits(t,
+		fmt.Sprintf("gaiacli query deposits --proposal-id=1 --output=json %v", flags))
+	require.Len(t, deposits, 1)
+	require.Equal(t, int64(15), deposits[0].Amount.AmountOf("steak").Int64())
+
+	deposit = executeGetDeposit(t,
+		fmt.Sprintf("gaiacli query deposit --proposal-id=1 --depositer=%s --output=json %v",
+			fooAddr, flags))
+	require.Equal(t, int64(15), deposit.Amount.AmountOf("steak").Int64())
 
 	fooAcc = executeGetAccount(t, fmt.Sprintf("gaiacli query account %s %v", fooAddr, flags))
 	require.Equal(t, int64(35), fooAcc.GetCoins().AmountOf("steak").Int64())
@@ -423,7 +445,8 @@ func TestGaiaCLISendGenerateSignAndBroadcast(t *testing.T) {
 	flags := fmt.Sprintf("--home=%s --node=%v --chain-id=%v", gaiacliHome, servAddr, chainID)
 
 	// start gaiad server
-	proc := tests.GoExecuteTWithStdout(t, fmt.Sprintf("gaiad start --home=%s --rpc.laddr=%v", gaiadHome, servAddr))
+	proc := tests.GoExecuteTWithStdout(t, fmt.Sprintf(
+		"gaiad start --home=%s --rpc.laddr=%v", gaiadHome, servAddr))
 
 	defer proc.Stop(false)
 	tests.WaitForTMStart(port)
@@ -468,11 +491,11 @@ func TestGaiaCLISendGenerateSignAndBroadcast(t *testing.T) {
 	unsignedTxFile := writeToNewTempFile(t, stdout)
 	defer os.Remove(unsignedTxFile.Name())
 
-	// Test sign --print-sigs
+	// Test sign --validate-signatures
 	success, stdout, _ = executeWriteRetStdStreams(t, fmt.Sprintf(
-		"gaiacli tx sign %v --print-sigs %v", flags, unsignedTxFile.Name()))
-	require.True(t, success)
-	require.Equal(t, fmt.Sprintf("Signers:\n 0: %v\n\nSignatures:\n", fooAddr.String()), stdout)
+		"gaiacli tx sign %v --validate-signatures %v", flags, unsignedTxFile.Name()))
+	require.False(t, success)
+	require.Equal(t, fmt.Sprintf("Signers:\n 0: %v\n\nSignatures:\n\n", fooAddr.String()), stdout)
 
 	// Test sign
 	success, stdout, _ = executeWriteRetStdStreams(t, fmt.Sprintf(
@@ -489,15 +512,17 @@ func TestGaiaCLISendGenerateSignAndBroadcast(t *testing.T) {
 
 	// Test sign --print-signatures
 	success, stdout, _ = executeWriteRetStdStreams(t, fmt.Sprintf(
-		"gaiacli tx sign %v --print-sigs %v", flags, signedTxFile.Name()))
+		"gaiacli tx sign %v --validate-signatures %v", flags, signedTxFile.Name()))
 	require.True(t, success)
-	require.Equal(t, fmt.Sprintf("Signers:\n 0: %v\n\nSignatures:\n 0: %v\n", fooAddr.String(), fooAddr.String()), stdout)
+	require.Equal(t, fmt.Sprintf("Signers:\n 0: %v\n\nSignatures:\n 0: %v\t[OK]\n\n", fooAddr.String(),
+		fooAddr.String()), stdout)
 
 	// Test broadcast
 	fooAcc := executeGetAccount(t, fmt.Sprintf("gaiacli query account %s %v", fooAddr, flags))
 	require.Equal(t, int64(50), fooAcc.GetCoins().AmountOf("steak").Int64())
 
-	success, stdout, _ = executeWriteRetStdStreams(t, fmt.Sprintf("gaiacli tx broadcast %v --json %v", flags, signedTxFile.Name()))
+	success, stdout, _ = executeWriteRetStdStreams(t, fmt.Sprintf(
+		"gaiacli tx broadcast %v --json %v", flags, signedTxFile.Name()))
 	require.True(t, success)
 	var result struct {
 		Response abci.ResponseDeliverTx
@@ -677,6 +702,24 @@ func executeGetValidator(t *testing.T, cmdStr string) stake.Validator {
 	return validator
 }
 
+func executeGetValidatorUnbondingDelegations(t *testing.T, cmdStr string) []stake.UnbondingDelegation {
+	out, _ := tests.ExecuteT(t, cmdStr, "")
+	var ubds []stake.UnbondingDelegation
+	cdc := app.MakeCodec()
+	err := cdc.UnmarshalJSON([]byte(out), &ubds)
+	require.NoError(t, err, "out %v\n, err %v", out, err)
+	return ubds
+}
+
+func executeGetValidatorRedelegations(t *testing.T, cmdStr string) []stake.Redelegation {
+	out, _ := tests.ExecuteT(t, cmdStr, "")
+	var reds []stake.Redelegation
+	cdc := app.MakeCodec()
+	err := cdc.UnmarshalJSON([]byte(out), &reds)
+	require.NoError(t, err, "out %v\n, err %v", out, err)
+	return reds
+}
+
 func executeGetPool(t *testing.T, cmdStr string) stake.Pool {
 	out, _ := tests.ExecuteT(t, cmdStr, "")
 	var pool stake.Pool
@@ -723,4 +766,22 @@ func executeGetVotes(t *testing.T, cmdStr string) []gov.Vote {
 	err := cdc.UnmarshalJSON([]byte(out), &votes)
 	require.NoError(t, err, "out %v\n, err %v", out, err)
 	return votes
+}
+
+func executeGetDeposit(t *testing.T, cmdStr string) gov.Deposit {
+	out, _ := tests.ExecuteT(t, cmdStr, "")
+	var deposit gov.Deposit
+	cdc := app.MakeCodec()
+	err := cdc.UnmarshalJSON([]byte(out), &deposit)
+	require.NoError(t, err, "out %v\n, err %v", out, err)
+	return deposit
+}
+
+func executeGetDeposits(t *testing.T, cmdStr string) []gov.Deposit {
+	out, _ := tests.ExecuteT(t, cmdStr, "")
+	var deposits []gov.Deposit
+	cdc := app.MakeCodec()
+	err := cdc.UnmarshalJSON([]byte(out), &deposits)
+	require.NoError(t, err, "out %v\n, err %v", out, err)
+	return deposits
 }

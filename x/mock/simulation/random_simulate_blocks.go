@@ -108,7 +108,7 @@ func SimulateFromSeed(tb testing.TB, app *baseapp.BaseApp,
 		blockLogBuilders = make([]*strings.Builder, numBlocks)
 	}
 	displayLogs := logPrinter(testingMode, blockLogBuilders)
-	blockSimulator := createBlockSimulator(testingMode, tb, t, event, invariants, ops, operationQueue, timeOperationQueue, numBlocks, displayLogs)
+	blockSimulator := createBlockSimulator(testingMode, tb, t, event, invariants, ops, operationQueue, timeOperationQueue, numBlocks, blockSize, displayLogs)
 	if !testingMode {
 		b.ResetTimer()
 	} else {
@@ -129,24 +129,36 @@ func SimulateFromSeed(tb testing.TB, app *baseapp.BaseApp,
 		pastTimes = append(pastTimes, header.Time)
 		pastVoteInfos = append(pastVoteInfos, request.LastCommitInfo.Votes)
 
+		// Construct log writer
+		logWriter := addLogMessage(testingMode, blockLogBuilders, i)
+
 		// Run the BeginBlock handler
+		logWriter("BeginBlock")
 		app.BeginBlock(request)
 
 		if testingMode {
 			// Make sure invariants hold at beginning of block
-			assertAllInvariants(t, app, invariants, displayLogs)
+			assertAllInvariants(t, app, header, invariants, "BeginBlock", displayLogs)
 		}
-		logWriter := addLogMessage(testingMode, blockLogBuilders, i)
 
 		ctx := app.NewContext(false, header)
-		thisBlockSize := getBlockSize(r, blockSize)
 
 		// Run queued operations. Ignores blocksize if blocksize is too small
+		logWriter("Queued operations")
 		numQueuedOpsRan := runQueuedOperations(operationQueue, int(header.Height), tb, r, app, ctx, accs, logWriter, displayLogs, event)
 		numQueuedTimeOpsRan := runQueuedTimeOperations(timeOperationQueue, header.Time, tb, r, app, ctx, accs, logWriter, displayLogs, event)
-		thisBlockSize = thisBlockSize - numQueuedOpsRan - numQueuedTimeOpsRan
-		operations := blockSimulator(thisBlockSize, r, app, ctx, accs, header, logWriter)
+		if testingMode && onOperation {
+			// Make sure invariants hold at end of queued operations
+			assertAllInvariants(t, app, header, invariants, "QueuedOperations", displayLogs)
+		}
+
+		logWriter("Standard operations")
+		operations := blockSimulator(r, app, ctx, accs, header, logWriter)
 		opCount += operations + numQueuedOpsRan + numQueuedTimeOpsRan
+		if testingMode {
+			// Make sure invariants hold at end of block
+			assertAllInvariants(t, app, header, invariants, "StandardOperations", displayLogs)
+		}
 
 		res := app.EndBlock(abci.RequestEndBlock{})
 		header.Height++
@@ -156,10 +168,16 @@ func SimulateFromSeed(tb testing.TB, app *baseapp.BaseApp,
 
 		if testingMode {
 			// Make sure invariants hold at end of block
-			assertAllInvariants(t, app, invariants, displayLogs)
+			assertAllInvariants(t, app, header, invariants, "EndBlock", displayLogs)
 		}
 		if commit {
 			app.Commit()
+		}
+
+		if header.ProposerAddress == nil {
+			fmt.Printf("\nSimulation stopped early as all validators have been unbonded, there is nobody left propose a block!\n")
+			stopEarly = true
+			break
 		}
 
 		// Generate a random RequestBeginBlock with the current validator set for the next block
@@ -178,11 +196,24 @@ func SimulateFromSeed(tb testing.TB, app *baseapp.BaseApp,
 	return nil
 }
 
+type blockSimFn func(
+	r *rand.Rand, app *baseapp.BaseApp, ctx sdk.Context,
+	accounts []Account, header abci.Header, logWriter func(string),
+) (opCount int)
+
 // Returns a function to simulate blocks. Written like this to avoid constant parameters being passed everytime, to minimize
 // memory overhead
-func createBlockSimulator(testingMode bool, tb testing.TB, t *testing.T, event func(string), invariants []Invariant, ops []WeightedOperation, operationQueue map[int][]Operation, timeOperationQueue []FutureOperation, totalNumBlocks int, displayLogs func()) func(
-	blocksize int, r *rand.Rand, app *baseapp.BaseApp, ctx sdk.Context, accounts []Account, header abci.Header, logWriter func(string)) (opCount int) {
-	totalOpWeight := 0
+func createBlockSimulator(testingMode bool, tb testing.TB, t *testing.T,
+	event func(string), invariants []Invariant,
+	ops []WeightedOperation, operationQueue map[int][]Operation, timeOperationQueue []FutureOperation,
+	totalNumBlocks int, avgBlockSize int, displayLogs func()) blockSimFn {
+
+	var (
+		lastBlocksizeState = 0 // state for [4 * uniform distribution]
+		totalOpWeight      = 0
+		blocksize          int
+	)
+
 	for i := 0; i < len(ops); i++ {
 		totalOpWeight += ops[i].Weight
 	}
@@ -197,23 +228,25 @@ func createBlockSimulator(testingMode bool, tb testing.TB, t *testing.T, event f
 		// shouldn't happen
 		return ops[0].Op
 	}
-	return func(blocksize int, r *rand.Rand, app *baseapp.BaseApp, ctx sdk.Context,
+
+	return func(r *rand.Rand, app *baseapp.BaseApp, ctx sdk.Context,
 		accounts []Account, header abci.Header, logWriter func(string)) (opCount int) {
+		lastBlocksizeState, blocksize = getBlockSize(r, lastBlocksizeState, avgBlockSize)
 		for j := 0; j < blocksize; j++ {
 			logUpdate, futureOps, err := selectOp(r)(r, app, ctx, accounts, event)
+			logWriter(logUpdate)
 			if err != nil {
 				displayLogs()
 				tb.Fatalf("error on operation %d within block %d, %v", header.Height, opCount, err)
 			}
-			logWriter(logUpdate)
 
 			queueOperations(operationQueue, timeOperationQueue, futureOps)
 			if testingMode {
 				if onOperation {
-					assertAllInvariants(t, app, invariants, displayLogs)
+					assertAllInvariants(t, app, header, invariants, fmt.Sprintf("operation: %v", logUpdate), displayLogs)
 				}
 				if opCount%50 == 0 {
-					fmt.Printf("\rSimulating... block %d/%d, operation %d/%d.  ", header.Height, totalNumBlocks, opCount, blocksize)
+					fmt.Printf("\rSimulating... block %d/%d, operation %d/%d. ", header.Height, totalNumBlocks, opCount, blocksize)
 				}
 			}
 			opCount++
@@ -233,16 +266,25 @@ func getTestingMode(tb testing.TB) (testingMode bool, t *testing.T, b *testing.B
 	return
 }
 
-func getBlockSize(r *rand.Rand, blockSize int) int {
-	load := r.Float64()
-	switch {
-	case load < 0.33:
-		return 0
-	case load < 0.66:
-		return r.Intn(blockSize * 2)
-	default:
-		return r.Intn(blockSize * 4)
+// getBlockSize returns a block size as determined from the transition matrix.
+// It targets making average block size the provided parameter. The three
+// states it moves between are:
+// "over stuffed" blocks with average size of 2 * avgblocksize,
+// normal sized blocks, hitting avgBlocksize on average,
+// and empty blocks, with no txs / only txs scheduled from the past.
+func getBlockSize(r *rand.Rand, lastBlockSizeState, avgBlockSize int) (state, blocksize int) {
+	// TODO: Make blockSizeTransitionMatrix non-global
+	// TODO: Make default blocksize transition matrix actually make the average
+	// blocksize equal to avgBlockSize.
+	state = blockSizeTransitionMatrix.NextState(r, lastBlockSizeState)
+	if state == 0 {
+		blocksize = r.Intn(avgBlockSize * 4)
+	} else if state == 1 {
+		blocksize = r.Intn(avgBlockSize * 2)
+	} else {
+		blocksize = 0
 	}
+	return
 }
 
 // adds all future operations into the operation queue.
@@ -370,6 +412,7 @@ func RandomRequestBeginBlock(r *rand.Rand, validators map[string]mockValidator, 
 		voteInfos[i] = abci.VoteInfo{
 			Validator: abci.Validator{
 				Address: pubkey.Address(),
+				Power:   mVal.val.Power,
 			},
 			SignedLastBlock: signed,
 		}
